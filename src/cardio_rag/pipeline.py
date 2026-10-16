@@ -4,7 +4,7 @@ import re
 from .citations import validate_citations
 from .config import Config
 from .evidence_gate import assess_evidence
-from .generation import extractive_answer
+from .generation import GenerationError, generator_from_environment
 from .query_router import adapt_query, classify_intent
 from .retrieval import LexicalIndex
 from .schemas import RunRecord
@@ -17,6 +17,12 @@ class QAPipeline:
     def __init__(self, index: LexicalIndex, config: Config | None = None):
         self.index = index
         self.config = config or Config()
+        try:
+            self.generator = generator_from_environment()
+            self.generator_error: str | None = None
+        except GenerationError as exc:
+            self.generator = None
+            self.generator_error = str(exc)
 
     def answer(self, question: str, variant: str = "baseline", question_id: str = "adhoc", reference_answer: str | None = None, relevant_chunk_ids: list[str] | None = None) -> RunRecord:
         started = time.perf_counter()
@@ -52,7 +58,30 @@ class QAPipeline:
                 generation_results = retrieved
             else:
                 generation_results = [item for item in retrieved if item.score >= self.config.min_score]
-            answer, citations = extractive_answer(generation_results)
+            if self.generator_error:
+                return RunRecord(
+                    question_id=question_id, question=question, variant=variant,
+                    answer=f"Answer generation failed: {self.generator_error}", abstained=True, intent=intent,
+                    retrieved_chunk_ids=[item.chunk.chunk_id for item in retrieved],
+                    retrieval_scores=[item.score for item in retrieved], retry_count=retry_count,
+                    abstention_reason=self.generator_error,
+                    latency_ms=(time.perf_counter() - started) * 1000,
+                    reference_answer=reference_answer, relevant_chunk_ids=relevant_chunk_ids or [],
+                    metadata={"generator_error": self.generator_error},
+                )
+            try:
+                generated = self.generator.generate(question, generation_results)
+            except GenerationError as exc:
+                return RunRecord(
+                    question_id=question_id, question=question, variant=variant,
+                    answer=f"Answer generation failed: {exc}", abstained=True, intent=intent,
+                    retrieved_chunk_ids=[item.chunk.chunk_id for item in retrieved],
+                    retrieval_scores=[item.score for item in retrieved], retry_count=retry_count,
+                    abstention_reason=str(exc), latency_ms=(time.perf_counter() - started) * 1000,
+                    reference_answer=reference_answer, relevant_chunk_ids=relevant_chunk_ids or [],
+                    metadata={"generator_error": str(exc), "provider": self.generator.provider, "model": self.generator.model},
+                )
+            answer = generated.answer
             citation_valid, citations = validate_citations(answer, generation_results)
             if not citations and variant in {"ea_rag", "ea_rag_no_adaptation"}:
                 abstain = True
@@ -65,5 +94,9 @@ class QAPipeline:
             retrieval_scores=[item.score for item in retrieved], citations=citations, citation_valid=citation_valid,
             retry_count=retry_count, abstention_reason=abstention_reason,
             latency_ms=(time.perf_counter() - started) * 1000, reference_answer=reference_answer,
-            relevant_chunk_ids=relevant_chunk_ids or [], metadata={"evidence": assessment.signals, "generator": "extractive"},
+            relevant_chunk_ids=relevant_chunk_ids or [], metadata={
+                "evidence": assessment.signals,
+                "generator": self.generator.provider if self.generator else "configuration_error",
+                "model": self.generator.model if self.generator else None,
+            },
         )

@@ -1,6 +1,31 @@
+import json
+import os
+from dataclasses import dataclass
+from typing import Protocol
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
 from .schemas import RetrievedChunk
 
 FALLBACK_LABEL = "Extractive demo response (no language model configured)."
+
+
+class GenerationError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class GenerationResult:
+    answer: str
+    provider: str
+    model: str
+
+
+class Generator(Protocol):
+    provider: str
+    model: str
+
+    def generate(self, question: str, results: list[RetrievedChunk]) -> GenerationResult: ...
 
 
 def extractive_answer(results: list[RetrievedChunk], max_sentences: int = 3) -> tuple[str, list[str]]:
@@ -17,3 +42,84 @@ def extractive_answer(results: list[RetrievedChunk], max_sentences: int = 3) -> 
         selected = [(results[0].score, results[0].chunk.text.strip(), results[0].chunk.chunk_id)]
     answer = " ".join(f"{sentence}. [{chunk_id}]" for _, sentence, chunk_id in selected)
     return f"{FALLBACK_LABEL}\n\n{answer}", [chunk_id for _, _, chunk_id in selected]
+
+
+class ExtractiveGenerator:
+    provider = "extractive"
+    model = "deterministic-extractive-v1"
+
+    def generate(self, question: str, results: list[RetrievedChunk]) -> GenerationResult:
+        answer, _ = extractive_answer(results)
+        return GenerationResult(answer, self.provider, self.model)
+
+
+class OpenAICompatibleGenerator:
+    provider = "openai_chat_completions"
+
+    def __init__(self, api_key: str, model: str, base_url: str = "https://api.openai.com/v1", timeout: float = 45.0):
+        if not api_key.strip() or not model.strip():
+            raise ValueError("API key and model must be non-empty")
+        self.api_key = api_key
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+
+    def generate(self, question: str, results: list[RetrievedChunk]) -> GenerationResult:
+        context = "\n\n".join(
+            f"[{item.chunk.chunk_id}] {item.chunk.title} | {item.chunk.publisher} | {item.chunk.url}\n{item.chunk.text}"
+            for item in results
+        )
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Answer educational cardiology questions only from the supplied source passages. "
+                    "Cite every factual claim with one or more exact retrieved chunk IDs in square brackets. "
+                    "If the passages do not support an answer, say the evidence is insufficient. "
+                    "Do not give personalized diagnosis or treatment advice. Keep the answer concise."
+                ),
+            },
+            {"role": "user", "content": f"Question: {question}\n\nSource passages:\n{context}"},
+        ]
+        payload = json.dumps({"model": self.model, "messages": messages, "temperature": 0}).encode("utf-8")
+        request = Request(
+            f"{self.base_url}/chat/completions",
+            data=payload,
+            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=self.timeout) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            raise GenerationError(f"Model API returned HTTP {exc.code}.") from exc
+        except URLError as exc:
+            raise GenerationError(f"Model API connection failed: {exc.reason}.") from exc
+        except (TimeoutError, OSError) as exc:
+            raise GenerationError(f"Model API request failed: {type(exc).__name__}.") from exc
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise GenerationError("Model API returned an invalid JSON response.") from exc
+        try:
+            answer = body["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise GenerationError("Model API response did not contain a completion message.") from exc
+        if not isinstance(answer, str) or not answer.strip():
+            raise GenerationError("Model API returned an empty answer.")
+        return GenerationResult(answer.strip(), self.provider, self.model)
+
+
+def generator_from_environment() -> Generator:
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        return ExtractiveGenerator()
+    model = os.getenv("OPENAI_MODEL", "").strip()
+    if not model:
+        raise GenerationError("OPENAI_MODEL must be set when OPENAI_API_KEY is configured.")
+    base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").strip()
+    try:
+        timeout = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "45"))
+    except ValueError as exc:
+        raise GenerationError("OPENAI_TIMEOUT_SECONDS must be a number.") from exc
+    if timeout <= 0:
+        raise GenerationError("OPENAI_TIMEOUT_SECONDS must be greater than zero.")
+    return OpenAICompatibleGenerator(api_key, model, base_url, timeout)

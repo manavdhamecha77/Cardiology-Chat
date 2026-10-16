@@ -9,6 +9,7 @@ A local research prototype comparing fixed top-k retrieval with evidence-gated r
 - Deterministic local BM25-style lexical retrieval. Sentence-transformer embeddings and a persistent vector database are not implemented yet.
 - Fixed top-k baseline and EA-RAG with keyword intent routing, query expansion, a configurable evidence threshold, one retry, and abstention.
 - A deterministic extractive generator, structural citation validation, JSONL evaluation records, aggregate JSON metrics, and run manifests.
+- Optional OpenAI Chat Completions generation with a grounded prompt; API/network errors are returned as explicit failed runs.
 - Ablations without abstention and without adaptation/retry, plus a minimal Streamlit interface.
 
 No source corpus or benchmark questions are bundled. Add permitted public educational source files and document each one's provenance and usage terms in `data/sources/manifest.json`. Do not use patient records. Do not report experiment results until you have supplied a corpus/questions and run the evaluation.
@@ -23,6 +24,15 @@ $env:PYTHONPATH = "src"
 ```
 
 The package uses only the Python standard library for ingestion, chunking, retrieval, and evaluation. `streamlit` runs the demo and `pytest` is available for the included unit tests.
+
+Generation defaults to the labeled extractive fallback. To opt into API generation, set `OPENAI_API_KEY` and `OPENAI_MODEL` in the current shell; `OPENAI_BASE_URL` and `OPENAI_TIMEOUT_SECONDS` are optional. For example:
+
+```powershell
+$env:OPENAI_API_KEY = "your-key"
+$env:OPENAI_MODEL = "your-enabled-model"
+```
+
+The request sends the question and retrieved public source passages to the configured endpoint. Never use personal health information. The key is read from the environment and is not written to run artifacts.
 
 ## Add sources and build the corpus
 
@@ -70,7 +80,7 @@ python -m streamlit run src/cardio_rag/app.py
 
 This is an educational research prototype, not a medical device, diagnostic service, or substitute for professional care. The UI warns users not to enter personal health information and the pipeline returns a safety notice for recognized first-person symptom queries. The notice uses simple keyword matching and is not a triage system. Never use outputs for clinical decisions.
 
-The retrieval score is a normalized lexical ranking signal, not calibrated confidence. Query intent and evidence sufficiency use transparent heuristics. The extractive fallback copies source sentences; citations are checked structurally and are not proof of semantic support. There is no language-model provider, embedding model, PDF/HTML parser, automatic contradiction detector, reviewed benchmark, or measured research result yet.
+The retrieval score is a normalized lexical ranking signal, not calibrated confidence. Query intent and evidence sufficiency use transparent heuristics. The extractive fallback copies source sentences; citations are checked structurally and are not proof of semantic support. There is no embedding model, PDF/HTML parser, automatic contradiction detector, reviewed benchmark, or measured research result yet.
 
 ## Research reference
 

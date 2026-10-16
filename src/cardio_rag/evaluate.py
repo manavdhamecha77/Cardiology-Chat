@@ -47,7 +47,8 @@ def evaluate(pipeline: QAPipeline, questions: list[dict[str, Any]], output_dir: 
         "questions_sha256": hashlib.sha256(json.dumps(questions, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest(),
         "questions_count": len(questions),
         "systems": ["baseline", "ea_rag", "ea_rag_no_abstention", "ea_rag_no_adaptation"],
-        "generator": "deterministic extractive fallback",
+        "generator": pipeline.generator.provider if pipeline.generator else "configuration_error",
+        "model": pipeline.generator.model if pipeline.generator else None,
         "retrieval": "BM25-style lexical ranking",
         "config": {"top_k": config.top_k, "min_score": config.min_score, "min_passages": config.min_passages, "chunk_words": config.chunk_words, "overlap_words": config.overlap_words, "seed": config.seed},
     }

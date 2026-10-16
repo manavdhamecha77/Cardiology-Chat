@@ -12,9 +12,22 @@ class Config:
     chunk_words: int = 550
     overlap_words: int = 80
     seed: int = 17
+    retrieval_backend: str = "lexical"
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embedding_revision: str | None = None
+    embedding_cache_dir: Path = Path("artifacts/indices")
+    dense_min_score: float = 0.45
 
     def __post_init__(self) -> None:
         if self.top_k < 1 or self.min_passages < 1:
             raise ValueError("top_k and min_passages must be positive")
         if self.chunk_words < 1 or not 0 <= self.overlap_words < self.chunk_words:
             raise ValueError("chunk overlap must be non-negative and smaller than chunk size")
+        if self.retrieval_backend not in {"lexical", "dense"}:
+            raise ValueError("retrieval_backend must be 'lexical' or 'dense'")
+        if not 0 <= self.dense_min_score <= 1:
+            raise ValueError("dense_min_score must be between zero and one")
+
+    @property
+    def evidence_min_score(self) -> float:
+        return self.dense_min_score if self.retrieval_backend == "dense" else self.min_score

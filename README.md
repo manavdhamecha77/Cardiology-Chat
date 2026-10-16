@@ -6,13 +6,15 @@ A local research prototype comparing fixed top-k retrieval with evidence-gated r
 
 - Source manifest validation and ingestion from local UTF-8 text or Markdown files.
 - Stable heading-aware chunks with source metadata and JSONL persistence.
-- Deterministic local BM25-style lexical retrieval. Sentence-transformer embeddings and a persistent vector database are not implemented yet.
+- Deterministic BM25-style lexical retrieval and optional CPU sentence-transformer cosine retrieval with a content/model-keyed embedding cache.
 - Fixed top-k baseline and EA-RAG with keyword intent routing, query expansion, a configurable evidence threshold, one retry, and abstention.
 - A deterministic extractive generator, structural citation validation, JSONL evaluation records, aggregate JSON metrics, and run manifests.
 - Optional OpenAI Chat Completions generation with a grounded prompt; API/network errors are returned as explicit failed runs.
 - Ablations without abstention and without adaptation/retry, plus a minimal Streamlit interface.
 
 No source corpus or benchmark questions are bundled. Add permitted public educational source files and document each one's provenance and usage terms in `data/sources/manifest.json`. Do not use patient records. Do not report experiment results until you have supplied a corpus/questions and run the evaluation.
+
+See [docs/TODO.md](docs/TODO.md) for the next research and implementation tasks.
 
 ## Setup (PowerShell)
 
@@ -23,16 +25,11 @@ Install the pinned dependencies manually into the existing root virtual environm
 $env:PYTHONPATH = "src"
 ```
 
-The package uses only the Python standard library for ingestion, chunking, retrieval, and evaluation. `streamlit` runs the demo and `pytest` is available for the included unit tests.
+Ingestion, chunking, and lexical retrieval use the Python standard library. Dense retrieval uses `sentence-transformers` on CPU and caches vectors under `artifacts/indices`; the first run downloads the selected embedding model. `streamlit` runs the demo and `pytest` runs the included unit tests.
 
-Generation defaults to the labeled extractive fallback. To opt into API generation, set `OPENAI_API_KEY` and `OPENAI_MODEL` in the current shell; `OPENAI_BASE_URL` and `OPENAI_TIMEOUT_SECONDS` are optional. For example:
+Generation defaults to the labeled extractive fallback. To use Ollama Cloud, copy `.env.example` to `.env`, then set `OLLAMA_API_KEY`, `OLLAMA_MODEL`, and `OLLAMA_BASE_URL=https://ollama.com/v1`. Ollama-compatible `OPENAI_API_KEY`, `OPENAI_MODEL`, and `OPENAI_BASE_URL` names are also accepted. Process environment variables take precedence over `.env` values.
 
-```powershell
-$env:OPENAI_API_KEY = "your-key"
-$env:OPENAI_MODEL = "your-enabled-model"
-```
-
-The request sends the question and retrieved public source passages to the configured endpoint. Never use personal health information. The key is read from the environment and is not written to run artifacts.
+The request sends the question and retrieved public source passages to the configured endpoint. Never use personal health information. The key is read from `.env` or the environment and is not written to run artifacts. Restart the app after changing these settings.
 
 ## Add sources and build the corpus
 
@@ -66,7 +63,10 @@ Chunk defaults are 550 whitespace-delimited words with 80 words of overlap. The 
 ```powershell
 python -m cardio_rag.cli ask "What is the definition of atrial fibrillation?" --variant ea_rag
 python -m cardio_rag.cli evaluate --questions data/evaluation/dev.jsonl --run-id pilot
+python -m cardio_rag.cli evaluate --questions data/evaluation/dev.jsonl --run-id pilot-dense --retrieval dense
 ```
+
+Lexical retrieval is the default and requires no model download. Dense retrieval defaults to `sentence-transformers/all-MiniLM-L6-v2`; set `CARDIO_RAG_EMBEDDING_MODEL` or pass `--embedding-model` to select another model. Set `CARDIO_RAG_EMBEDDING_REVISION` or pass `--embedding-revision` to pin a model revision. The initial dense evidence threshold is a configurable heuristic and must be tuned on development data only.
 
 Question JSONL records require a non-empty `question`; optional fields include `question_id`, `reference_answer`, and `relevant_chunk_ids`. The evaluator runs baseline, EA-RAG, no-abstention, and no-adaptation variants on the same records. It writes per-question `artifacts/pilot.jsonl`, aggregate `artifacts/pilot_metrics.json`, and configuration `artifacts/pilot_manifest.json`. It calculates citation structure validity, Hit@k when relevance labels exist, a simple reference-answer substring rate when answers are provided, abstention, and latency. Substring match is not a clinical correctness metric. Unsupported-answer and semantic citation support rates require human review and are not inferred by this prototype.
 
@@ -80,7 +80,7 @@ python -m streamlit run src/cardio_rag/app.py
 
 This is an educational research prototype, not a medical device, diagnostic service, or substitute for professional care. The UI warns users not to enter personal health information and the pipeline returns a safety notice for recognized first-person symptom queries. The notice uses simple keyword matching and is not a triage system. Never use outputs for clinical decisions.
 
-The retrieval score is a normalized lexical ranking signal, not calibrated confidence. Query intent and evidence sufficiency use transparent heuristics. The extractive fallback copies source sentences; citations are checked structurally and are not proof of semantic support. There is no embedding model, PDF/HTML parser, automatic contradiction detector, reviewed benchmark, or measured research result yet.
+Retrieval scores are lexical ranking signals or cosine similarities, not calibrated confidence. Query intent and evidence sufficiency use transparent heuristics. The extractive fallback copies source sentences; citations are checked structurally and are not proof of semantic support. There is no PDF/HTML parser, automatic contradiction detector, reviewed benchmark, or measured research result yet.
 
 ## Research reference
 

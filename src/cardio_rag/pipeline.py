@@ -6,7 +6,7 @@ from .config import Config
 from .evidence_gate import assess_evidence
 from .generation import GenerationError, generator_from_environment
 from .query_router import adapt_query, classify_intent
-from .retrieval import LexicalIndex
+from .retrieval import DenseIndex, LexicalIndex
 from .schemas import RunRecord
 
 RESEARCH_NOTICE = "Research prototype for educational use only; not medical advice or a clinical decision system."
@@ -14,7 +14,7 @@ PERSONAL_SYMPTOM_NOTICE = "If these are your symptoms, contact a qualified healt
 
 
 class QAPipeline:
-    def __init__(self, index: LexicalIndex, config: Config | None = None):
+    def __init__(self, index: LexicalIndex | DenseIndex, config: Config | None = None):
         self.index = index
         self.config = config or Config()
         try:
@@ -35,7 +35,7 @@ class QAPipeline:
 
         retrieved = self.index.retrieve(question, self.config.top_k)
         retry_count = 0
-        assessment = assess_evidence(retrieved, self.config.min_score, self.config.min_passages)
+        assessment = assess_evidence(retrieved, self.config.evidence_min_score, self.config.min_passages)
         if variant in {"ea_rag", "ea_rag_no_abstention"} and not assessment.sufficient:
             retry_count = 1
             retry_query = adapt_query(question, intent)
@@ -45,7 +45,7 @@ class QAPipeline:
                 if item.chunk.chunk_id not in merged or item.score > merged[item.chunk.chunk_id].score:
                     merged[item.chunk.chunk_id] = item
             retrieved = sorted(merged.values(), key=lambda item: (-item.score, item.chunk.chunk_id))[:self.config.top_k]
-            assessment = assess_evidence(retrieved, self.config.min_score, self.config.min_passages)
+            assessment = assess_evidence(retrieved, self.config.evidence_min_score, self.config.min_passages)
 
         abstain = variant in {"ea_rag", "ea_rag_no_adaptation"} and not assessment.sufficient
         abstention_reason = assessment.reason if abstain else None
@@ -57,7 +57,7 @@ class QAPipeline:
             if variant in {"baseline", "ea_rag_no_abstention"}:
                 generation_results = retrieved
             else:
-                generation_results = [item for item in retrieved if item.score >= self.config.min_score]
+                generation_results = [item for item in retrieved if item.score >= self.config.evidence_min_score]
             if self.generator_error:
                 return RunRecord(
                     question_id=question_id, question=question, variant=variant,

@@ -1,6 +1,8 @@
 import json
 import os
+import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -54,8 +56,6 @@ class ExtractiveGenerator:
 
 
 class OpenAICompatibleGenerator:
-    provider = "openai_chat_completions"
-
     def __init__(self, api_key: str, model: str, base_url: str = "https://api.openai.com/v1", timeout: float = 45.0):
         if not api_key.strip() or not model.strip():
             raise ValueError("API key and model must be non-empty")
@@ -63,6 +63,7 @@ class OpenAICompatibleGenerator:
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.provider = "ollama_openai_compatible" if "ollama.com" in self.base_url or "localhost:11434" in self.base_url else "openai_chat_completions"
 
     def generate(self, question: str, results: list[RetrievedChunk]) -> GenerationResult:
         context = "\n\n".join(
@@ -108,16 +109,52 @@ class OpenAICompatibleGenerator:
         return GenerationResult(answer.strip(), self.provider, self.model)
 
 
+def _dotenv_values(path: Path = Path(".env")) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    raw_values: dict[str, str] = {}
+    assignment = re.compile(r"^(?:\$env:)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$")
+    for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("#") or line.startswith("```"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        match = assignment.fullmatch(line)
+        if not match:
+            raise GenerationError(f"Invalid .env entry on line {line_number}; use NAME=value assignments.")
+        name, value = match.groups()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        elif value.startswith(("\"", "'")):
+            value = value[1:]
+        raw_values[name] = value
+    values: dict[str, str] = {}
+    for name, value in raw_values.items():
+        if value.startswith("$env:"):
+            reference = value[len("$env:"):].strip()
+            value = os.environ.get(reference, raw_values.get(reference, ""))
+            if not value:
+                raise GenerationError(f".env reference for {name} points to an unset variable.")
+        values[name] = value
+    return values
+
+
 def generator_from_environment() -> Generator:
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    file_values = _dotenv_values()
+    settings = {**file_values, **os.environ}
+    ollama_key = settings.get("OLLAMA_API_KEY", "").strip()
+    api_key = ollama_key or settings.get("OPENAI_API_KEY", "").strip()
     if not api_key:
         return ExtractiveGenerator()
-    model = os.getenv("OPENAI_MODEL", "").strip()
+    model = settings.get("OLLAMA_MODEL", "").strip() or settings.get("OPENAI_MODEL", "").strip()
     if not model:
-        raise GenerationError("OPENAI_MODEL must be set when OPENAI_API_KEY is configured.")
-    base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").strip()
+        model_variable = "OLLAMA_MODEL" if ollama_key else "OPENAI_MODEL"
+        raise GenerationError(f"{model_variable} must be set when a model API key is configured.")
+    default_base = "https://ollama.com/v1" if ollama_key else "https://api.openai.com/v1"
+    base_url = settings.get("OLLAMA_BASE_URL", "").strip() or settings.get("OPENAI_BASE_URL", default_base).strip()
     try:
-        timeout = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "45"))
+        timeout = float(settings.get("OLLAMA_TIMEOUT_SECONDS", "").strip() or settings.get("OPENAI_TIMEOUT_SECONDS", "45"))
     except ValueError as exc:
         raise GenerationError("OPENAI_TIMEOUT_SECONDS must be a number.") from exc
     if timeout <= 0:

@@ -49,8 +49,11 @@ def evaluate(pipeline: QAPipeline, questions: list[dict[str, Any]], output_dir: 
         "systems": ["baseline", "ea_rag", "ea_rag_no_abstention", "ea_rag_no_adaptation"],
         "generator": pipeline.generator.provider if pipeline.generator else "configuration_error",
         "model": pipeline.generator.model if pipeline.generator else None,
-        "retrieval": "BM25-style lexical ranking",
-        "config": {"top_k": config.top_k, "min_score": config.min_score, "min_passages": config.min_passages, "chunk_words": config.chunk_words, "overlap_words": config.overlap_words, "seed": config.seed},
+        "retrieval": config.retrieval_backend,
+        "embedding_model": config.embedding_model if config.retrieval_backend == "dense" else None,
+        "embedding_revision": config.embedding_revision if config.retrieval_backend == "dense" else None,
+        "embedding_cache_key": getattr(pipeline.index, "cache_key", None),
+        "config": {"top_k": config.top_k, "min_score": config.min_score, "dense_min_score": config.dense_min_score, "min_passages": config.min_passages, "chunk_words": config.chunk_words, "overlap_words": config.overlap_words, "seed": config.seed},
     }
     (output_dir / f"{run_id}_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return metrics

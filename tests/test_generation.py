@@ -4,7 +4,7 @@ from urllib.error import HTTPError
 
 import pytest
 
-from cardio_rag.generation import GenerationError, OpenAICompatibleGenerator, generator_from_environment
+from cardio_rag.generation import GenerationError, OpenAICompatibleGenerator, _dotenv_values, generator_from_environment
 
 
 def test_no_key_selects_local_fallback():
@@ -16,6 +16,23 @@ def test_key_requires_explicit_model(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-secret")
     with pytest.raises(GenerationError, match="OPENAI_MODEL"):
         generator_from_environment()
+
+
+def test_dotenv_supports_ollama_settings_and_shell_variable_reference(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        'OLLAMA_API_KEY=ollama-test-key\n'
+        '$env:OPENAI_API_KEY = $env:OLLAMA_API_KEY\n'
+        'OPENAI_BASE_URL="https://ollama.com/v1"\n'
+        'OPENAI_MODEL="gemma4:31b\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    values = _dotenv_values(env_path)
+    assert values["OPENAI_API_KEY"] == "ollama-test-key"
+    generator = generator_from_environment()
+    assert generator.provider == "ollama_openai_compatible"
+    assert generator.model == "gemma4:31b"
 
 
 def test_openai_compatible_request_extracts_answer(monkeypatch):
